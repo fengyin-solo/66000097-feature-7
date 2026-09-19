@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import type { Device, Geofence, FenceRule, FenceEventType, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import { normalizeFence, createRule, defaultSchedule, pickActiveRule, buildFenceAlertMessage } from '../utils/fenceRules';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -15,15 +16,28 @@ export const useIotStore = defineStore('iot', () => {
     { id: 'd5', name: '追踪器-E05', lat: 39.8992, lng: 116.4104, status: 'online', lastSeen: new Date().toISOString(), battery: 92, temperature: 23.8 },
   ]);
   const fences = ref<Geofence[]>([
-    { id: 'f1', name: '办公区域', center: { lat: 39.9042, lng: 116.4074 }, radius: 500, type: 'circle', alertOnEnter: false, alertOnExit: true, color: '#4caf50' },
-    { id: 'f2', name: '危险区域', center: { lat: 39.9142, lng: 116.3974 }, radius: 200, type: 'circle', alertOnEnter: true, alertOnExit: false, color: '#e53935' },
-    { id: 'f3', name: '仓库区域', center: { lat: 39.8992, lng: 116.4124 }, radius: 0, type: 'polygon',
+    normalizeFence({
+      id: 'f1', name: '办公区域', center: { lat: 39.9042, lng: 116.4074 }, radius: 500, type: 'circle', color: '#4caf50',
+      rules: [createRule('exit', 'warning')],
+      schedule: { enabled: true, startTime: '09:00', endTime: '18:00' },
+    }),
+    normalizeFence({
+      id: 'f2', name: '危险区域', center: { lat: 39.9142, lng: 116.3974 }, radius: 200, type: 'circle', color: '#e53935',
+      rules: [createRule('enter', 'critical')],
+      schedule: defaultSchedule(),
+    }),
+    normalizeFence({
+      id: 'f3', name: '仓库区域', center: { lat: 39.8992, lng: 116.4124 }, radius: 0, type: 'polygon', color: '#1976d2',
       paths: [
         { lat: 39.9012, lng: 116.4094 },
         { lat: 39.9012, lng: 116.4154 },
         { lat: 39.8972, lng: 116.4154 },
         { lat: 39.8972, lng: 116.4094 },
-      ], alertOnEnter: true, alertOnExit: true, color: '#1976d2' },
+      ],
+      // 同一事件配置两条不同严重度规则，用于演示冲突优先级提示
+      rules: [createRule('enter', 'warning'), createRule('enter', 'critical')],
+      schedule: defaultSchedule(),
+    }),
   ]);
   const alerts = ref<Alert[]>([
     {
@@ -48,15 +62,18 @@ export const useIotStore = defineStore('iot', () => {
       id: generateId('a'),
       deviceId: 'd2',
       fenceId: 'f2',
+      ruleId: fences.value[1].rules[0]?.id,
       type: 'enter',
       severity: 'critical',
       timestamp: new Date(Date.now() - 600000).toISOString(),
-      message: '设备进入危险区域',
+      message: buildFenceAlertMessage('传感器-B02', '危险区域', fences.value[1].rules[0]),
       acknowledged: false
     }
   ]);
   const selectedFenceId = ref<string | null>(null);
   const editMode = ref<'none' | 'draw-circle' | 'draw-polygon' | 'edit'>('none');
+  const fenceToast = ref<{ message: string; tone: 'success' | 'warning' } | null>(null);
+  let fenceToastTimer: number | null = null;
   const highlightedDeviceId = ref<string | null>(null);
   const isRegisteringDevice = ref(false);
   const registrationLocation = ref<{ lat: number; lng: number } | null>(null);
@@ -188,53 +205,73 @@ export const useIotStore = defineStore('iot', () => {
   }
 
   function generateMockAlert() {
-    const alertTypes: Array<{ type: AlertType; severity: AlertSeverity; weight: number }> = [
-      { type: 'enter', severity: 'critical', weight: 2 },
-      { type: 'exit', severity: 'warning', weight: 2 },
+    const randomDevice = devices.value[Math.floor(Math.random() * devices.value.length)];
+    const now = new Date();
+
+    // 围栏告警候选：只收录当前生效（规则启用且命中生效时段）的规则，按权重抽取
+    const fenceCandidates: Array<{ fence: Geofence; rule: FenceRule; weight: number }> = [];
+    fences.value.forEach((fence) => {
+      (['enter', 'exit', 'dwell'] as FenceEventType[]).forEach((event) => {
+        const rule = pickActiveRule(fence, event, now);
+        if (rule) {
+          fenceCandidates.push({ fence, rule, weight: event === 'dwell' ? 1 : 2 });
+        }
+      });
+    });
+
+    const otherCandidates: Array<{ type: AlertType; severity: AlertSeverity; weight: number }> = [
       { type: 'low_battery', severity: 'warning', weight: 3 },
       { type: 'offline', severity: 'critical', weight: 1 },
     ];
 
-    const totalWeight = alertTypes.reduce((sum, t) => sum + t.weight, 0);
+    const totalWeight =
+      fenceCandidates.reduce((sum, c) => sum + c.weight, 0) +
+      otherCandidates.reduce((sum, c) => sum + c.weight, 0);
+
+    // 所有围栏都没有生效规则时，仍保留设备类告警
+    if (totalWeight === 0) return;
+
     let random = Math.random() * totalWeight;
-    let selectedType = alertTypes[0];
-    for (const t of alertTypes) {
-      random -= t.weight;
-      if (random <= 0) {
-        selectedType = t;
-        break;
+    let pick: { kind: 'fence'; fence: Geofence; rule: FenceRule } | { kind: 'other'; type: AlertType; severity: AlertSeverity } | null = null;
+    for (const c of fenceCandidates) {
+      random -= c.weight;
+      if (random <= 0) { pick = { kind: 'fence', fence: c.fence, rule: c.rule }; break; }
+    }
+    if (!pick) {
+      for (const c of otherCandidates) {
+        random -= c.weight;
+        if (random <= 0) { pick = { kind: 'other', type: c.type, severity: c.severity }; break; }
       }
     }
-
-    const randomDevice = devices.value[Math.floor(Math.random() * devices.value.length)];
-    const randomFence = fences.value[Math.floor(Math.random() * fences.value.length)];
+    if (!pick) return;
 
     let message = '';
-    let fenceId: string | undefined = undefined;
+    let fenceId: string | undefined;
+    let ruleId: string | undefined;
+    let type: AlertType;
+    let severity: AlertSeverity;
 
-    switch (selectedType.type) {
-      case 'enter':
-        fenceId = randomFence.id;
-        message = `${randomDevice.name} 进入 ${randomFence.name}`;
-        break;
-      case 'exit':
-        fenceId = randomFence.id;
-        message = `${randomDevice.name} 离开 ${randomFence.name}`;
-        break;
-      case 'low_battery':
-        message = `${randomDevice.name} 电量过低 (${Math.floor(Math.random() * 15)}%)`;
-        break;
-      case 'offline':
-        message = `${randomDevice.name} 设备离线`;
-        break;
+    if (pick.kind === 'fence') {
+      fenceId = pick.fence.id;
+      ruleId = pick.rule.id;
+      type = pick.rule.event;
+      severity = pick.rule.severity;
+      message = buildFenceAlertMessage(randomDevice.name, pick.fence.name, pick.rule);
+    } else {
+      type = pick.type;
+      severity = pick.severity;
+      message = pick.type === 'low_battery'
+        ? `${randomDevice.name} 电量过低 (${Math.floor(Math.random() * 15)}%)`
+        : `${randomDevice.name} 设备离线`;
     }
 
     addAlert({
       deviceId: randomDevice.id,
       fenceId,
-      type: selectedType.type,
-      severity: selectedType.severity,
-      timestamp: new Date().toISOString(),
+      ruleId,
+      type,
+      severity,
+      timestamp: now.toISOString(),
       message
     });
   }
@@ -257,9 +294,10 @@ export const useIotStore = defineStore('iot', () => {
     }
   }
 
-  function addFence(fence: Omit<Geofence, 'id'>) {
+  function addFence(fence: Partial<Omit<Geofence, 'id'>>) {
     const id = 'f' + Date.now();
-    fences.value.push({ ...fence, id });
+    const normalized = normalizeFence(fence) as Omit<Geofence, 'id'>;
+    fences.value.push({ ...normalized, id });
     return id;
   }
 
@@ -297,6 +335,24 @@ export const useIotStore = defineStore('iot', () => {
     const idx = fences.value.findIndex(f => f.id === id);
     if (idx !== -1) {
       fences.value[idx] = { ...fences.value[idx], ...updates };
+    }
+  }
+
+  /** 保存围栏后在地图上给出统一提示（规则冲突时为警示口径） */
+  function showFenceToast(message: string, tone: 'success' | 'warning' = 'success') {
+    fenceToast.value = { message, tone };
+    if (fenceToastTimer) window.clearTimeout(fenceToastTimer);
+    fenceToastTimer = window.setTimeout(() => {
+      fenceToast.value = null;
+      fenceToastTimer = null;
+    }, 3200);
+  }
+
+  function clearFenceToast() {
+    fenceToast.value = null;
+    if (fenceToastTimer) {
+      window.clearTimeout(fenceToastTimer);
+      fenceToastTimer = null;
     }
   }
 
@@ -858,7 +914,7 @@ export const useIotStore = defineStore('iot', () => {
   }
 
   return {
-    devices, fences, alerts, selectedFenceId, editMode, highlightedDeviceId,
+    devices, fences, alerts, selectedFenceId, editMode, fenceToast, highlightedDeviceId,
     isRegisteringDevice, registrationLocation, groups,
     onlineCount, offlineCount, alertDeviceCount, deviceCount, fenceCount, alertCount, selectedFence,
     avgBattery, avgTemperature, lowBatteryCount, devicesRanked, recentAlerts,
@@ -874,6 +930,7 @@ export const useIotStore = defineStore('iot', () => {
     setHighlightedDevice, addAlert, generateMockAlert,
     startMockAlertStream, stopMockAlertStream,
     addFence, updateFence, deleteFence, selectFence, setEditMode,
+    showFenceToast, clearFenceToast,
     addDevice, startDeviceRegistration, cancelDeviceRegistration, setRegistrationLocation,
     loadTrackData, startPlayback, pausePlayback, stopPlayback,
     seekToIndex, seekToProgress, setPlaybackSpeed,

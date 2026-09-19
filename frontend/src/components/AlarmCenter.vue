@@ -261,6 +261,7 @@ function getAlertIcon(type: AlertType): string {
   switch (type) {
     case 'enter': return '🚨';
     case 'exit': return '🚪';
+    case 'dwell': return '⏱️';
     case 'low_battery': return '🔋';
     case 'offline': return '📵';
     default: return '⚠️';

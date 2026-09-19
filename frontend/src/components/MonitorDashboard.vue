@@ -255,6 +255,7 @@ import { ref, onMounted, onUnmounted, watch } from 'vue';
 import L from 'leaflet';
 import { useIotStore } from '../stores/iot';
 import type { Alert, AlertType, AlertSeverity, Device } from '../types';
+import { getFenceSummaryLines } from '../utils/fenceRules';
 
 const store = useIotStore();
 
@@ -288,6 +289,7 @@ function getAlertIcon(type: AlertType): string {
   switch (type) {
     case 'enter': return '🚨';
     case 'exit': return '🚪';
+    case 'dwell': return '⏱️';
     case 'low_battery': return '🔋';
     case 'offline': return '📵';
     default: return '⚠️';
@@ -397,7 +399,9 @@ function renderFence(fence: any) {
   }
 
   if (layerObj) {
-    layerObj.bindPopup(`<b>${fence.name}</b><br>${fence.type === 'circle' ? '圆形 · ' + fence.radius + 'm' : '多边形 · ' + (fence.paths?.length || 0) + '点'}`);
+    const shape = fence.type === 'circle' ? '圆形 · ' + fence.radius + 'm' : '多边形 · ' + (fence.paths?.length || 0) + '点';
+    const detailLines = getFenceSummaryLines(fence).join('<br>');
+    layerObj.bindPopup(`<b>${fence.name}</b><br>${shape}<br>${detailLines}`);
     fenceLayers.value.set(fence.id, layerObj);
   }
 }

@@ -9,6 +9,17 @@
       padding:'8px 16px', background:'#1b5e20', color:'#fff', borderRadius:'20px', fontSize:'12px', zIndex:1000, boxShadow:'0 2px 8px rgba(0,0,0,0.2)' }">
       📍 点击地图选择设备位置
     </div>
+    <transition name="fence-toast">
+      <div v-if="store.fenceToast"
+        :style="{ position:'absolute', top:'12px', left:'50%', transform:'translateX(-50%)',
+          padding:'8px 18px', borderRadius:'20px', fontSize:'13px', zIndex:1200, maxWidth:'70%',
+          boxShadow:'0 2px 10px rgba(0,0,0,0.25)',
+          background: store.fenceToast.tone === 'warning' ? '#fff8e1' : '#e8f5e9',
+          border:'1px solid ' + (store.fenceToast.tone === 'warning' ? '#ffe082' : '#a5d6a7'),
+          color: store.fenceToast.tone === 'warning' ? '#795548' : '#2e7d32' }">
+        {{ store.fenceToast.tone === 'warning' ? '⚠️ ' : '✅ ' }}{{ store.fenceToast.message }}
+      </div>
+    </transition>
   </div>
 </template>
 
@@ -18,6 +29,7 @@ import L from 'leaflet';
 import type { LatLng, LeafletMouseEvent, LeafletEvent, Marker } from 'leaflet';
 import { useIotStore } from '../stores/iot';
 import type { Geofence } from '../types';
+import { createRule, defaultSchedule, getFenceSummaryLines } from '../utils/fenceRules';
 
 const store = useIotStore();
 
@@ -108,6 +120,20 @@ const endPointIcon = L.divIcon({
   iconAnchor: [7, 7]
 });
 
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch] as string));
+}
+
+function fencePopupHtml(fence: Geofence): string {
+  const shape = fence.type === 'circle'
+    ? `圆形 · ${fence.radius}m`
+    : `多边形 · ${fence.paths?.length || 0}点`;
+  const lines = getFenceSummaryLines(fence).map(l => escapeHtml(l)).join('<br>');
+  return `<b>${escapeHtml(fence.name)}</b><br>${shape}<br>${lines}`;
+}
+
 function renderFence(fence: Geofence) {
   clearFenceLayer(fence.id);
 
@@ -125,7 +151,7 @@ function renderFence(fence: Geofence) {
       weight,
       dashArray
     });
-    circle.bindPopup(`<b>${fence.name}</b><br>圆形 · ${fence.radius}m<br>${fence.alertOnEnter ? '进入告警 ' : ''}${fence.alertOnExit ? '离开告警' : ''}`);
+    circle.bindPopup(fencePopupHtml(fence));
     circle.on('click', () => {
       if (store.editMode === 'none' || store.editMode === 'edit') {
         store.selectFence(fence.id);
@@ -152,7 +178,7 @@ function renderFence(fence: Geofence) {
       weight,
       dashArray
     });
-    polygon.bindPopup(`<b>${fence.name}</b><br>多边形 · ${fence.paths.length}点<br>${fence.alertOnEnter ? '进入告警 ' : ''}${fence.alertOnExit ? '离开告警' : ''}`);
+    polygon.bindPopup(fencePopupHtml(fence));
     polygon.on('click', () => {
       if (store.editMode === 'none' || store.editMode === 'edit') {
         store.selectFence(fence.id);
@@ -510,9 +536,9 @@ function finishCircleDrawing() {
     center: { lat: drawingCircleCenter.value.lat, lng: drawingCircleCenter.value.lng },
     radius,
     type: 'circle',
-    alertOnEnter: true,
-    alertOnExit: false,
-    color: '#1976d2'
+    color: '#1976d2',
+    rules: [createRule('enter', 'critical')],
+    schedule: defaultSchedule()
   });
 
   clearDrawingTemp();
@@ -529,9 +555,9 @@ function finishPolygonDrawing() {
     radius: 0,
     type: 'polygon',
     paths: [...drawingPoints.value],
-    alertOnEnter: true,
-    alertOnExit: false,
-    color: '#1976d2'
+    color: '#1976d2',
+    rules: [createRule('enter', 'critical')],
+    schedule: defaultSchedule()
   });
 
   clearDrawingTemp();
@@ -896,6 +922,8 @@ onMounted(() => {
       0%, 100% { transform: scale(1); opacity: 1; }
       50% { transform: scale(1.2); opacity: 0.7; }
     }
+    .fence-toast-enter-active, .fence-toast-leave-active { transition: all 0.25s ease; }
+    .fence-toast-enter-from, .fence-toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(-8px); }
   `;
   document.head.appendChild(style);
 

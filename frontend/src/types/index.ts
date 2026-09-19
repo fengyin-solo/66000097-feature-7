@@ -29,21 +29,56 @@ export interface DeviceRegistrationForm {
   thresholds: DeviceThresholds;
 }
 
+export type AlertSeverity = 'critical' | 'warning' | 'info';
+export type FenceEventType = 'enter' | 'exit' | 'dwell';
+
+export interface FenceEventName {
+  label: string;
+  short: string;
+  icon: string;
+  action: string;
+}
+
+export interface FenceRule {
+  id: string;
+  /** enter=进入围栏 / exit=离开围栏 / dwell=停留超时 */
+  event: FenceEventType;
+  enabled: boolean;
+  severity: AlertSeverity;
+  /** 仅 dwell 规则使用，单位：分钟 */
+  dwellTimeout?: number;
+}
+
+export interface FenceSchedule {
+  /** 关闭时全天生效；开启时限定每日 startTime-endTime，end<=start 视为跨天 */
+  enabled: boolean;
+  startTime: string; // HH:mm
+  endTime: string;   // HH:mm
+}
+
 export interface Geofence {
   id: string; name: string;
   center: { lat: number; lng: number };
   radius: number; type: 'circle' | 'polygon';
   paths?: Array<{ lat: number; lng: number }>;
-  alertOnEnter: boolean; alertOnExit: boolean; color: string;
+  color: string;
+  /** 分级告警规则（进入/离开/停留超时，各可配多条、不同严重度） */
+  rules: FenceRule[];
+  /** 每日生效时段 */
+  schedule: FenceSchedule;
+  /** @deprecated 旧字段，规则以 rules 为准，仅用于兼容旧数据迁移 */
+  alertOnEnter?: boolean;
+  /** @deprecated 旧字段，规则以 rules 为准，仅用于兼容旧数据迁移 */
+  alertOnExit?: boolean;
 }
 
-export type AlertType = 'enter' | 'exit' | 'low_battery' | 'offline';
-export type AlertSeverity = 'critical' | 'warning' | 'info';
+export type AlertType = FenceEventType | 'low_battery' | 'offline';
 
 export interface Alert {
   id: string;
   deviceId: string;
   fenceId?: string;
+  ruleId?: string;
   type: AlertType;
   severity: AlertSeverity;
   timestamp: string;
