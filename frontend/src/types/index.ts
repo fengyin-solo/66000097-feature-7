@@ -29,15 +29,40 @@ export interface DeviceRegistrationForm {
   thresholds: DeviceThresholds;
 }
 
+export type FenceRuleType = 'enter' | 'exit' | 'dwell';
+
+export interface FenceRule {
+  enabled: boolean;
+  severity: AlertSeverity;
+  /** 仅停留超时规则使用：停留超过该分钟数触发告警 */
+  dwellMinutes?: number;
+}
+
+export interface FenceRules {
+  enter: FenceRule;
+  exit: FenceRule;
+  dwell: FenceRule;
+}
+
+export interface FenceSchedule {
+  enabled: boolean;
+  /** 每日生效起点，HH:mm */
+  startTime: string;
+  /** 每日生效终点，HH:mm；支持跨天（如 22:00-06:00），起止相同视为全天 */
+  endTime: string;
+}
+
 export interface Geofence {
   id: string; name: string;
   center: { lat: number; lng: number };
   radius: number; type: 'circle' | 'polygon';
   paths?: Array<{ lat: number; lng: number }>;
   alertOnEnter: boolean; alertOnExit: boolean; color: string;
+  rules?: FenceRules;
+  schedule?: FenceSchedule;
 }
 
-export type AlertType = 'enter' | 'exit' | 'low_battery' | 'offline';
+export type AlertType = 'enter' | 'exit' | 'dwell' | 'low_battery' | 'offline';
 export type AlertSeverity = 'critical' | 'warning' | 'info';
 
 export interface Alert {

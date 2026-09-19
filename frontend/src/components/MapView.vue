@@ -108,6 +108,13 @@ const endPointIcon = L.divIcon({
   iconAnchor: [7, 7]
 });
 
+function fencePopupHtml(fence: Geofence, shapeText: string): string {
+  const inactiveNote = store.isFenceActiveNow(fence)
+    ? ''
+    : '<br><span style="color:#e65100">当前不在生效时段，告警暂不触发</span>';
+  return `<b>${fence.name}</b><br>${shapeText}<br>${store.getFenceRuleSummary(fence)}${inactiveNote}`;
+}
+
 function renderFence(fence: Geofence) {
   clearFenceLayer(fence.id);
 
@@ -125,7 +132,7 @@ function renderFence(fence: Geofence) {
       weight,
       dashArray
     });
-    circle.bindPopup(`<b>${fence.name}</b><br>圆形 · ${fence.radius}m<br>${fence.alertOnEnter ? '进入告警 ' : ''}${fence.alertOnExit ? '离开告警' : ''}`);
+    circle.bindPopup(fencePopupHtml(fence, `圆形 · ${fence.radius}m`));
     circle.on('click', () => {
       if (store.editMode === 'none' || store.editMode === 'edit') {
         store.selectFence(fence.id);
@@ -152,7 +159,7 @@ function renderFence(fence: Geofence) {
       weight,
       dashArray
     });
-    polygon.bindPopup(`<b>${fence.name}</b><br>多边形 · ${fence.paths.length}点<br>${fence.alertOnEnter ? '进入告警 ' : ''}${fence.alertOnExit ? '离开告警' : ''}`);
+    polygon.bindPopup(fencePopupHtml(fence, `多边形 · ${fence.paths.length}点`));
     polygon.on('click', () => {
       if (store.editMode === 'none' || store.editMode === 'edit') {
         store.selectFence(fence.id);

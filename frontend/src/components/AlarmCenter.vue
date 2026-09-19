@@ -78,7 +78,7 @@
               <div style="fontSize:11px;color:#888;marginBottom:4px">
                 📱 {{ getDeviceName(alert.deviceId) }}
                 <span v-if="alert.fenceId" style="marginLeft:8px">
-                  🗺️ {{ getFenceName(alert.fenceId) }}
+                  🗺️ {{ store.getAlertFenceLabel(alert) }}
                 </span>
               </div>
               <div style="fontSize:10px;color:#999">
@@ -115,7 +115,7 @@
               <div style="fontSize:11px;color:#888;marginBottom:4px">
                 📱 {{ getDeviceName(alert.deviceId) }}
                 <span v-if="alert.fenceId" style="marginLeft:8px">
-                  🗺️ {{ getFenceName(alert.fenceId) }}
+                  🗺️ {{ store.getAlertFenceLabel(alert) }}
                 </span>
               </div>
               <div style="fontSize:10px;color:#999">
@@ -152,7 +152,7 @@
               <div style="fontSize:11px;color:#888;marginBottom:4px">
                 📱 {{ getDeviceName(alert.deviceId) }}
                 <span v-if="alert.fenceId" style="marginLeft:8px">
-                  🗺️ {{ getFenceName(alert.fenceId) }}
+                  🗺️ {{ store.getAlertFenceLabel(alert) }}
                 </span>
               </div>
               <div style="fontSize:10px;color:#999">
@@ -187,7 +187,7 @@
             <div style="fontSize:11px;color:#888;marginBottom:4px">
               📱 {{ getDeviceName(alert.deviceId) }}
               <span v-if="alert.fenceId" style="marginLeft:8px">
-                🗺️ {{ getFenceName(alert.fenceId) }}
+                🗺️ {{ store.getAlertFenceLabel(alert) }}
               </span>
             </div>
             <div style="fontSize:10px;color:#999">
@@ -261,6 +261,7 @@ function getAlertIcon(type: AlertType): string {
   switch (type) {
     case 'enter': return '🚨';
     case 'exit': return '🚪';
+    case 'dwell': return '⏱️';
     case 'low_battery': return '🔋';
     case 'offline': return '📵';
     default: return '⚠️';
@@ -296,10 +297,6 @@ function getSeverityBgColor(severity: AlertSeverity): string {
 
 function getDeviceName(deviceId: string): string {
   return store.getDeviceById(deviceId)?.name || '未知设备';
-}
-
-function getFenceName(fenceId: string): string {
-  return store.getFenceById(fenceId)?.name || '未知围栏';
 }
 
 function formatTime(isoString: string): string {

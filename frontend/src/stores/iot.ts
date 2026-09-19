@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
+import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary, FenceRule, FenceRules, FenceRuleType, FenceSchedule } from '../types';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
@@ -15,8 +15,19 @@ export const useIotStore = defineStore('iot', () => {
     { id: 'd5', name: '追踪器-E05', lat: 39.8992, lng: 116.4104, status: 'online', lastSeen: new Date().toISOString(), battery: 92, temperature: 23.8 },
   ]);
   const fences = ref<Geofence[]>([
-    { id: 'f1', name: '办公区域', center: { lat: 39.9042, lng: 116.4074 }, radius: 500, type: 'circle', alertOnEnter: false, alertOnExit: true, color: '#4caf50' },
-    { id: 'f2', name: '危险区域', center: { lat: 39.9142, lng: 116.3974 }, radius: 200, type: 'circle', alertOnEnter: true, alertOnExit: false, color: '#e53935' },
+    { id: 'f1', name: '办公区域', center: { lat: 39.9042, lng: 116.4074 }, radius: 500, type: 'circle', alertOnEnter: false, alertOnExit: true, color: '#4caf50',
+      rules: {
+        enter: { enabled: false, severity: 'critical' },
+        exit: { enabled: true, severity: 'warning' },
+        dwell: { enabled: false, severity: 'warning', dwellMinutes: 30 }
+      },
+      schedule: { enabled: true, startTime: '09:00', endTime: '18:00' } },
+    { id: 'f2', name: '危险区域', center: { lat: 39.9142, lng: 116.3974 }, radius: 200, type: 'circle', alertOnEnter: true, alertOnExit: false, color: '#e53935',
+      rules: {
+        enter: { enabled: true, severity: 'critical' },
+        exit: { enabled: false, severity: 'warning' },
+        dwell: { enabled: true, severity: 'warning', dwellMinutes: 30 }
+      } },
     { id: 'f3', name: '仓库区域', center: { lat: 39.8992, lng: 116.4124 }, radius: 0, type: 'polygon',
       paths: [
         { lat: 39.9012, lng: 116.4094 },
@@ -152,6 +163,112 @@ export const useIotStore = defineStore('iot', () => {
     return fences.value.find(f => f.id === id);
   }
 
+  // ---- 围栏分级规则与生效时段（地图提示、告警记录、围栏详情共用的同一口径） ----
+
+  const DEFAULT_DWELL_MINUTES = 30;
+  const SEVERITY_LABELS: Record<AlertSeverity, string> = { critical: '严重', warning: '警告', info: '提示' };
+  const RULE_TYPE_NAMES: Record<FenceRuleType, string> = { enter: '进入告警', exit: '离开告警', dwell: '停留超时告警' };
+  // 冲突优先级：严重度 严重>警告>提示；同级按 进入>停留超时>离开
+  const SEVERITY_RANK: Record<AlertSeverity, number> = { critical: 3, warning: 2, info: 1 };
+  const RULE_TYPE_RANK: Record<FenceRuleType, number> = { enter: 3, dwell: 2, exit: 1 };
+
+  type FenceRuleCarrier = {
+    rules?: FenceRules;
+    schedule?: FenceSchedule;
+    alertOnEnter?: boolean;
+    alertOnExit?: boolean;
+  };
+
+  function severityLabel(severity: AlertSeverity): string {
+    return SEVERITY_LABELS[severity] || severity;
+  }
+
+  function fenceRuleTypeName(type: FenceRuleType): string {
+    return RULE_TYPE_NAMES[type] || type;
+  }
+
+  /** 未设置 rules 的旧围栏按 alertOnEnter/alertOnExit 归一化，保证仍正常展示与告警 */
+  function normalizeFenceRules(fence: FenceRuleCarrier): FenceRules {
+    if (fence.rules) return fence.rules;
+    return {
+      enter: { enabled: !!fence.alertOnEnter, severity: 'critical' },
+      exit: { enabled: !!fence.alertOnExit, severity: 'warning' },
+      dwell: { enabled: false, severity: 'warning', dwellMinutes: DEFAULT_DWELL_MINUTES }
+    };
+  }
+
+  function normalizeFenceSchedule(fence: FenceRuleCarrier): FenceSchedule {
+    if (fence.schedule) return fence.schedule;
+    return { enabled: false, startTime: '08:00', endTime: '20:00' };
+  }
+
+  function getFenceRuleLabel(fence: FenceRuleCarrier, type: FenceRuleType): string {
+    const rule = normalizeFenceRules(fence)[type];
+    const base = type === 'dwell'
+      ? `停留超${rule.dwellMinutes ?? DEFAULT_DWELL_MINUTES}分钟告警`
+      : RULE_TYPE_NAMES[type];
+    return `${base}(${severityLabel(rule.severity)})`;
+  }
+
+  /** 围栏规则的一句话汇总：地图 popup、围栏详情、列表共用 */
+  function getFenceRuleSummary(fence: FenceRuleCarrier): string {
+    const rules = normalizeFenceRules(fence);
+    const parts = (['enter', 'exit', 'dwell'] as FenceRuleType[])
+      .filter(t => rules[t].enabled)
+      .map(t => getFenceRuleLabel(fence, t));
+    let text = parts.length > 0 ? parts.join(' · ') : '未启用告警规则';
+    const schedule = normalizeFenceSchedule(fence);
+    if (schedule.enabled) {
+      text += ` ｜ 生效时段 ${schedule.startTime}-${schedule.endTime}`;
+    }
+    return text;
+  }
+
+  /** 当前时刻是否处于围栏生效时段内；未启用时段限定视为始终生效 */
+  function isFenceActiveNow(fence: FenceRuleCarrier, now: Date = new Date()): boolean {
+    const schedule = normalizeFenceSchedule(fence);
+    if (!schedule.enabled) return true;
+    const [sh, sm] = schedule.startTime.split(':').map(Number);
+    const [eh, em] = schedule.endTime.split(':').map(Number);
+    const start = sh * 60 + sm;
+    const end = eh * 60 + em;
+    if (start === end) return true;
+    const mins = now.getHours() * 60 + now.getMinutes();
+    if (start < end) return mins >= start && mins < end;
+    return mins >= start || mins < end;
+  }
+
+  /** 已启用规则按冲突优先级排序，用于编辑器的冲突提示 */
+  function getFenceRulePriorityList(fence: FenceRuleCarrier): Array<{ type: FenceRuleType; rule: FenceRule }> {
+    const rules = normalizeFenceRules(fence);
+    return (['enter', 'exit', 'dwell'] as FenceRuleType[])
+      .filter(t => rules[t].enabled)
+      .map(t => ({ type: t, rule: rules[t] }))
+      .sort((a, b) => {
+        const sevDiff = SEVERITY_RANK[b.rule.severity] - SEVERITY_RANK[a.rule.severity];
+        if (sevDiff !== 0) return sevDiff;
+        return RULE_TYPE_RANK[b.type] - RULE_TYPE_RANK[a.type];
+      });
+  }
+
+  function buildFenceAlertMessage(deviceName: string, fence: Geofence, type: FenceRuleType): string {
+    if (type === 'enter') return `${deviceName} 进入 ${fence.name}`;
+    if (type === 'exit') return `${deviceName} 离开 ${fence.name}`;
+    const dwellMinutes = normalizeFenceRules(fence).dwell.dwellMinutes ?? DEFAULT_DWELL_MINUTES;
+    return `${deviceName} 在 ${fence.name} 停留超过 ${dwellMinutes} 分钟`;
+  }
+
+  /** 告警记录中围栏信息的统一展示口径：围栏名 · 规则标签 */
+  function getAlertFenceLabel(alert: Alert): string {
+    if (!alert.fenceId) return '';
+    const fence = getFenceById(alert.fenceId);
+    const name = fence ? fence.name : '未知围栏';
+    if (!fence || (alert.type !== 'enter' && alert.type !== 'exit' && alert.type !== 'dwell')) {
+      return name;
+    }
+    return `${name} · ${getFenceRuleLabel(fence, alert.type)}`;
+  }
+
   function acknowledgeAlert(id: string) {
     const a = alerts.value.find(a => a.id === id);
     if (a) a.acknowledged = true;
@@ -188,52 +305,61 @@ export const useIotStore = defineStore('iot', () => {
   }
 
   function generateMockAlert() {
-    const alertTypes: Array<{ type: AlertType; severity: AlertSeverity; weight: number }> = [
-      { type: 'enter', severity: 'critical', weight: 2 },
-      { type: 'exit', severity: 'warning', weight: 2 },
-      { type: 'low_battery', severity: 'warning', weight: 3 },
-      { type: 'offline', severity: 'critical', weight: 1 },
-    ];
+    const randomDevice = devices.value[Math.floor(Math.random() * devices.value.length)];
 
-    const totalWeight = alertTypes.reduce((sum, t) => sum + t.weight, 0);
+    // 围栏事件候选：仅取规则已启用且当前处于生效时段的围栏
+    type Candidate = {
+      kind: 'fence' | 'low_battery' | 'offline';
+      weight: number;
+      fence?: Geofence;
+      ruleType?: FenceRuleType;
+      severity: AlertSeverity;
+    };
+    const candidates: Candidate[] = [];
+    fences.value.forEach(f => {
+      if (!isFenceActiveNow(f)) return;
+      const rules = normalizeFenceRules(f);
+      (['enter', 'exit', 'dwell'] as FenceRuleType[]).forEach(t => {
+        if (rules[t].enabled) {
+          candidates.push({ kind: 'fence', weight: 2, fence: f, ruleType: t, severity: rules[t].severity });
+        }
+      });
+    });
+    candidates.push({ kind: 'low_battery', weight: 3, severity: 'warning' });
+    candidates.push({ kind: 'offline', weight: 1, severity: 'critical' });
+
+    const totalWeight = candidates.reduce((sum, c) => sum + c.weight, 0);
     let random = Math.random() * totalWeight;
-    let selectedType = alertTypes[0];
-    for (const t of alertTypes) {
-      random -= t.weight;
+    let selected = candidates[candidates.length - 1];
+    for (const c of candidates) {
+      random -= c.weight;
       if (random <= 0) {
-        selectedType = t;
+        selected = c;
         break;
       }
     }
 
-    const randomDevice = devices.value[Math.floor(Math.random() * devices.value.length)];
-    const randomFence = fences.value[Math.floor(Math.random() * fences.value.length)];
-
     let message = '';
     let fenceId: string | undefined = undefined;
+    let alertType: AlertType;
 
-    switch (selectedType.type) {
-      case 'enter':
-        fenceId = randomFence.id;
-        message = `${randomDevice.name} 进入 ${randomFence.name}`;
-        break;
-      case 'exit':
-        fenceId = randomFence.id;
-        message = `${randomDevice.name} 离开 ${randomFence.name}`;
-        break;
-      case 'low_battery':
-        message = `${randomDevice.name} 电量过低 (${Math.floor(Math.random() * 15)}%)`;
-        break;
-      case 'offline':
-        message = `${randomDevice.name} 设备离线`;
-        break;
+    if (selected.kind === 'fence' && selected.fence && selected.ruleType) {
+      fenceId = selected.fence.id;
+      alertType = selected.ruleType;
+      message = buildFenceAlertMessage(randomDevice.name, selected.fence, selected.ruleType);
+    } else if (selected.kind === 'low_battery') {
+      alertType = 'low_battery';
+      message = `${randomDevice.name} 电量过低 (${Math.floor(Math.random() * 15)}%)`;
+    } else {
+      alertType = 'offline';
+      message = `${randomDevice.name} 设备离线`;
     }
 
     addAlert({
       deviceId: randomDevice.id,
       fenceId,
-      type: selectedType.type,
-      severity: selectedType.severity,
+      type: alertType,
+      severity: selected.severity,
       timestamp: new Date().toISOString(),
       message
     });
@@ -870,6 +996,9 @@ export const useIotStore = defineStore('iot', () => {
     playbackCurrentPoint, playbackProgress, playbackCurrentTime,
     deviceHealthList, priorityInspectionList, healthSummary, recentAbnormalRecords,
     getDeviceById, getFenceById, getGroupById, getDeviceHealth,
+    severityLabel, fenceRuleTypeName, normalizeFenceRules, normalizeFenceSchedule,
+    getFenceRuleLabel, getFenceRuleSummary, isFenceActiveNow, getFenceRulePriorityList,
+    buildFenceAlertMessage, getAlertFenceLabel,
     acknowledgeAlert, batchAcknowledgeAlerts, acknowledgeAllAlerts,
     setHighlightedDevice, addAlert, generateMockAlert,
     startMockAlertStream, stopMockAlertStream,

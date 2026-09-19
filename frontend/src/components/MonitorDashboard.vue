@@ -141,7 +141,7 @@
                   </div>
                   <div style="font-size:11px;color:#90a4ae;margin-top:2px">
                     {{ getDeviceName(alert.deviceId) }}
-                    <span v-if="alert.fenceId" style="margin-left:8px">{{ getFenceName(alert.fenceId) }}</span>
+                    <span v-if="alert.fenceId" style="margin-left:8px">{{ store.getAlertFenceLabel(alert) }}</span>
                     <span style="margin-left:8px">{{ formatTime(alert.timestamp) }}</span>
                   </div>
                 </div>
@@ -164,7 +164,7 @@
                   </div>
                   <div style="font-size:11px;color:#90a4ae;margin-top:2px">
                     {{ getDeviceName(alert.deviceId) }}
-                    <span v-if="alert.fenceId" style="margin-left:8px">{{ getFenceName(alert.fenceId) }}</span>
+                    <span v-if="alert.fenceId" style="margin-left:8px">{{ store.getAlertFenceLabel(alert) }}</span>
                     <span style="margin-left:8px">{{ formatTime(alert.timestamp) }}</span>
                   </div>
                 </div>
@@ -288,6 +288,7 @@ function getAlertIcon(type: AlertType): string {
   switch (type) {
     case 'enter': return '🚨';
     case 'exit': return '🚪';
+    case 'dwell': return '⏱️';
     case 'low_battery': return '🔋';
     case 'offline': return '📵';
     default: return '⚠️';
@@ -332,10 +333,6 @@ function getSeverityText(severity: AlertSeverity): string {
 
 function getDeviceName(deviceId: string): string {
   return store.getDeviceById(deviceId)?.name || '未知设备';
-}
-
-function getFenceName(fenceId: string): string {
-  return store.getFenceById(fenceId)?.name || '未知围栏';
 }
 
 function formatTime(isoString: string): string {
@@ -397,7 +394,7 @@ function renderFence(fence: any) {
   }
 
   if (layerObj) {
-    layerObj.bindPopup(`<b>${fence.name}</b><br>${fence.type === 'circle' ? '圆形 · ' + fence.radius + 'm' : '多边形 · ' + (fence.paths?.length || 0) + '点'}`);
+    layerObj.bindPopup(`<b>${fence.name}</b><br>${fence.type === 'circle' ? '圆形 · ' + fence.radius + 'm' : '多边形 · ' + (fence.paths?.length || 0) + '点'}<br>${store.getFenceRuleSummary(fence)}`);
     fenceLayers.value.set(fence.id, layerObj);
   }
 }

@@ -256,7 +256,7 @@
           <div style="font-size:11px;color:#888;margin-bottom:4px">
             📱 {{ getDeviceName(alert.deviceId) }}
             <span v-if="alert.fenceId" style="margin-left:8px">
-              🗺️ {{ getFenceName(alert.fenceId) }}
+              🗺️ {{ store.getAlertFenceLabel(alert) }}
             </span>
           </div>
           <div style="display:flex;justify-content:space-between;align-items:center">
@@ -388,6 +388,7 @@ function getAlertIcon(type: AlertType): string {
   switch (type) {
     case 'enter': return '🚨';
     case 'exit': return '🚪';
+    case 'dwell': return '⏱️';
     case 'low_battery': return '🔋';
     case 'offline': return '📵';
     default: return '⚠️';
@@ -432,10 +433,6 @@ function getSeverityText(severity: AlertSeverity): string {
 
 function getDeviceName(deviceId: string): string {
   return store.getDeviceById(deviceId)?.name || '未知设备';
-}
-
-function getFenceName(fenceId: string): string {
-  return store.getFenceById(fenceId)?.name || '未知围栏';
 }
 
 function formatTime(isoString: string): string {
